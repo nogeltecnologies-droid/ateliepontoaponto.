@@ -1,0 +1,332 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  collection, 
+  onSnapshot, 
+  doc, 
+  addDoc, 
+  deleteDoc,
+  updateDoc,
+  query
+} from 'firebase/firestore';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  signInWithCustomToken,
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  Calendar, 
+  Trash2, 
+  ClipboardList, 
+  User, 
+  MapPin, 
+  Phone,
+  Plus,
+  Scissors,
+  Clock,
+  Check,
+  X,
+  StickyNote
+} from 'lucide-react';
+
+// Firebase Configuration
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'ponto-a-ponto-atelier';
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [pedidos, setPedidos] = useState([]);
+  const [blockedDates, setBlockedDates] = useState([]);
+  const [notes, setNotes] = useState([]);
+  const [newDate, setNewDate] = useState('');
+  const [newNote, setNewNote] = useState('');
+  const [activeTab, setActiveTab] = useState('pedidos');
+
+  // RULE 3: Auth Before Queries - Fixed implementation
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Erro na autenticação inicial:", err);
+      }
+    };
+
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Sync Data with User Guard (RULE 3)
+  useEffect(() => {
+    // Crucial Guard: Do not start listeners if user is not authenticated
+    if (!user) return;
+
+    // Define collections using the mandatory path (RULE 1)
+    const pedidosRef = collection(db, 'artifacts', appId, 'public', 'data', 'pedidos');
+    const datesRef = collection(db, 'artifacts', appId, 'public', 'data', 'blocked_dates');
+    const notesRef = collection(db, 'artifacts', appId, 'public', 'data', 'admin_notes');
+
+    // Orders listener with success and error callbacks
+    const unsubPedidos = onSnapshot(query(pedidosRef), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Sort in memory to follow RULE 2 (No complex queries)
+      setPedidos(data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+    }, (err) => {
+      console.error("Erro ao carregar pedidos:", err);
+    });
+
+    // Dates listener
+    const unsubDates = onSnapshot(query(datesRef), (snapshot) => {
+      setBlockedDates(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (err) => {
+      console.error("Erro ao carregar datas:", err);
+    });
+
+    // Notes listener
+    const unsubNotes = onSnapshot(query(notesRef), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setNotes(data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
+    }, (err) => {
+      console.error("Erro ao carregar notas:", err);
+    });
+
+    return () => {
+      unsubPedidos();
+      unsubDates();
+      unsubNotes();
+    };
+  }, [user]); // Re-run when user state changes
+
+  // Actions
+  const updatePedidoStatus = async (id, status) => {
+    if (!user) return;
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'pedidos', id);
+      await updateDoc(docRef, { status });
+    } catch (err) {
+      console.error("Erro ao atualizar status:", err);
+    }
+  };
+
+  const deletePedido = async (id) => {
+    if (!user) return;
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'pedidos', id);
+      await deleteDoc(docRef);
+    } catch (err) {
+      console.error("Erro ao excluir pedido:", err);
+    }
+  };
+
+  const blockNewDate = async (e) => {
+    e.preventDefault();
+    if (!newDate || !user) return;
+    try {
+      const datesRef = collection(db, 'artifacts', appId, 'public', 'data', 'blocked_dates');
+      await addDoc(datesRef, { date: newDate });
+      setNewDate('');
+    } catch (err) {
+      console.error("Erro ao bloquear data:", err);
+    }
+  };
+
+  const removeBlockedDate = async (id) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'blocked_dates', id));
+    } catch (err) {
+      console.error("Erro ao remover data:", err);
+    }
+  };
+
+  const addNote = async (e) => {
+    e.preventDefault();
+    if (!newNote.trim() || !user) return;
+    try {
+      const notesRef = collection(db, 'artifacts', appId, 'public', 'data', 'admin_notes');
+      await addDoc(notesRef, { 
+        text: newNote, 
+        createdAt: new Date().toISOString() 
+      });
+      setNewNote('');
+    } catch (err) {
+      console.error("Erro ao salvar nota:", err);
+    }
+  };
+
+  const deleteNote = async (id) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'admin_notes', id));
+    } catch (err) {
+      console.error("Erro ao excluir nota:", err);
+    }
+  };
+
+  // Loading state
+  if (!user) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#D4AF37] mx-auto mb-4"></div>
+        <p className="text-gray-500 font-medium">Autenticando painel administrativo...</p>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row font-sans text-[#2C2C2C]">
+      {/* Sidebar Navigation */}
+      <aside className="w-full md:w-64 bg-[#2C2C2C] text-white p-6 flex flex-col shadow-xl z-10">
+        <div className="flex items-center gap-3 mb-10">
+          <div className="w-10 h-10 bg-[#D4AF37] rounded-xl flex items-center justify-center font-bold text-[#2C2C2C]">NS</div>
+          <div>
+            <h1 className="font-serif font-bold tracking-wider">Ateliê Admin</h1>
+            <p className="text-[10px] text-gray-400 uppercase tracking-widest">{user?.uid.substring(0, 8)}</p>
+          </div>
+        </div>
+
+        <nav className="space-y-2 flex-grow">
+          <button 
+            onClick={() => setActiveTab('pedidos')} 
+            className={`w-full flex items-center gap-3 p-4 rounded-xl transition-all ${activeTab === 'pedidos' ? 'bg-[#D4AF37] text-[#2C2C2C]' : 'hover:bg-white/5 text-gray-400'}`}
+          >
+            <ClipboardList size={20} /> Pedidos
+          </button>
+          <button 
+            onClick={() => setActiveTab('agenda')} 
+            className={`w-full flex items-center gap-3 p-4 rounded-xl transition-all ${activeTab === 'agenda' ? 'bg-[#D4AF37] text-[#2C2C2C]' : 'hover:bg-white/5 text-gray-400'}`}
+          >
+            <Calendar size={20} /> Minha Agenda
+          </button>
+          <button 
+            onClick={() => setActiveTab('notas')} 
+            className={`w-full flex items-center gap-3 p-4 rounded-xl transition-all ${activeTab === 'notas' ? 'bg-[#D4AF37] text-[#2C2C2C]' : 'hover:bg-white/5 text-gray-400'}`}
+          >
+            <StickyNote size={20} /> Bloco de Notas
+          </button>
+        </nav>
+      </aside>
+
+      {/* Main Panel Content */}
+      <main className="flex-grow p-4 md:p-10 overflow-y-auto max-h-screen">
+        {activeTab === 'pedidos' && (
+          <div className="max-w-5xl mx-auto space-y-6">
+            <h2 className="text-3xl font-serif font-bold">Gerenciar Pedidos</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {pedidos.length === 0 ? (
+                <div className="col-span-full py-20 text-center bg-white rounded-3xl border border-dashed text-gray-400">Nenhum pedido recebido ainda.</div>
+              ) : (
+                pedidos.map(p => (
+                  <div key={p.id} className={`bg-white p-6 rounded-3xl shadow-sm border-t-4 transition-all ${p.status === 'aceito' ? 'border-green-400' : p.status === 'recusado' ? 'border-red-400' : 'border-[#D4AF37]'}`}>
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h4 className="font-bold text-lg">{p.nome}</h4>
+                        <p className="text-xs text-gray-400">{new Date(p.createdAt).toLocaleString('pt-BR')}</p>
+                      </div>
+                      {p.urgente === 'Sim' && <span className="bg-red-50 text-red-500 text-[10px] font-bold px-2 py-1 rounded">URGENTE</span>}
+                    </div>
+
+                    <div className="text-sm space-y-2 mb-6 text-gray-600">
+                      <p className="flex items-center gap-2"><Scissors size={14} className="text-[#D4AF37]"/> <b>Serviço:</b> {p.servico}</p>
+                      <p className="flex items-center gap-2"><MapPin size={14} className="text-[#D4AF37]"/> <b>Local:</b> {p.bairro}</p>
+                      <p className="flex items-center gap-2"><Calendar size={14} className="text-[#D4AF37]"/> <b>Entrega:</b> {new Date(p.dataEntrega + 'T00:00:00').toLocaleDateString('pt-BR')}</p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {p.status !== 'aceito' && (
+                        <button onClick={() => updatePedidoStatus(p.id, 'aceito')} className="flex-grow bg-green-500 text-white py-2 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 hover:bg-green-600 transition-colors">
+                          <Check size={16} /> Aceitar
+                        </button>
+                      )}
+                      {p.status !== 'recusado' && (
+                        <button onClick={() => updatePedidoStatus(p.id, 'recusado')} className="flex-grow bg-red-500 text-white py-2 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 hover:bg-red-600 transition-colors">
+                          <X size={16} /> Recusar
+                        </button>
+                      )}
+                      <button onClick={() => deletePedido(p.id)} className="p-2 text-gray-300 hover:text-red-500 transition-colors" title="Remover permanentemente">
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                    
+                    <a href={`https://wa.me/${p.telefone?.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="mt-3 w-full flex items-center justify-center gap-2 bg-[#2C2C2C] text-white py-3 rounded-xl font-bold text-xs hover:bg-[#D4AF37] hover:text-[#2C2C2C] transition-all">
+                      <Phone size={14} /> Chamar no WhatsApp
+                    </a>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'agenda' && (
+          <div className="max-w-2xl mx-auto space-y-8">
+            <h2 className="text-3xl font-serif font-bold text-center">Controle de Agenda</h2>
+            <form onSubmit={blockNewDate} className="bg-white p-6 rounded-3xl shadow-md flex flex-col gap-4 border border-gray-100">
+              <label className="text-xs font-bold uppercase text-gray-400 tracking-widest">Selecionar data para bloquear</label>
+              <input type="date" value={newDate} required onChange={(e) => setNewDate(e.target.value)} className="p-4 bg-gray-50 rounded-xl outline-none focus:ring-2 focus:ring-[#D4AF37] border border-transparent" />
+              <button type="submit" className="bg-[#2C2C2C] text-[#D4AF37] py-4 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-[#3d3d3d] transition-all shadow-lg">
+                <Plus size={20} /> Bloquear Data
+              </button>
+            </form>
+            <div className="space-y-3">
+              {blockedDates.sort((a,b) => new Date(a.date) - new Date(b.date)).map(d => (
+                <div key={d.id} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm border border-gray-100 hover:border-red-100 transition-all">
+                  <div className="flex items-center gap-3">
+                    <Calendar size={18} className="text-[#D4AF37]" />
+                    <span className="font-bold text-sm">{new Date(d.date + 'T00:00:00').toLocaleDateString('pt-BR', { dateStyle: 'long' })}</span>
+                  </div>
+                  <button onClick={() => removeBlockedDate(d.id)} className="text-gray-200 hover:text-red-500 p-2 transition-colors"><Trash2 size={20} /></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'notas' && (
+          <div className="max-w-2xl mx-auto space-y-8">
+            <h2 className="text-3xl font-serif font-bold text-center">Bloco de Notas</h2>
+            <form onSubmit={addNote} className="bg-white p-6 rounded-3xl shadow-md flex flex-col gap-4 border border-gray-100">
+              <textarea value={newNote} onChange={(e) => setNewNote(e.target.value)} placeholder="Digite um lembrete ou anotação importante..." className="p-4 bg-gray-50 rounded-xl outline-none h-32 resize-none focus:ring-2 focus:ring-[#D4AF37] border border-transparent" />
+              <button type="submit" className="bg-[#2C2C2C] text-[#D4AF37] py-4 rounded-xl font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-[#3d3d3d] transition-all shadow-lg">
+                <Plus size={20} /> Adicionar Nota
+              </button>
+            </form>
+            <div className="grid grid-cols-1 gap-4">
+              {notes.length === 0 ? (
+                <p className="text-center text-gray-400 italic">O bloco de notas está vazio.</p>
+              ) : (
+                notes.map(n => (
+                  <div key={n.id} className="bg-[#FEF9C3] p-6 rounded-2xl shadow-sm relative group border border-[#FDE68A] hover:shadow-md transition-all">
+                    <p className="text-sm text-gray-800 pr-8 leading-relaxed whitespace-pre-wrap">{n.text}</p>
+                    <button onClick={() => deleteNote(n.id)} className="absolute top-4 right-4 text-[#B45309] hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Trash2 size={16} />
+                    </button>
+                    <div className="flex justify-between items-center mt-4 border-t border-[#FDE68A] pt-2">
+                       <p className="text-[10px] text-[#D97706] font-bold uppercase tracking-wider">{new Date(n.createdAt).toLocaleDateString('pt-BR')}</p>
+                       <p className="text-[9px] text-gray-400">Privado ao Admin</p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default App;
